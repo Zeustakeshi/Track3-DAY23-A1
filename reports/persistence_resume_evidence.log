@@ -1,0 +1,7 @@
+=== SQLite checkpointer resume evidence — 2026-08-25T16:54:57.188081 ===
+build_checkpointer('sqlite', 'outputs/persistence_demo.db') -> <langgraph.checkpoint.sqlite.SqliteSaver object at 0x00000254C141CF20>
+invoke() final state: attempt=3, events=3
+[process 1] len(list(graph.get_state_history(config))) = 5
+[process 2] resumed state.values = {'attempt': 3, 'messages': [], 'tool_results': [], 'errors': [], 'events': [{'node': 'step', 'event_type': 'completed', 'message': 'attempt 1'}, {'node': 'step', 'event_type': 'completed', 'message': 'attempt 2'}, {'node': 'step', 'event_type': 'completed', 'message': 'attempt 3'}]}
+[process 2] len(list(graph.get_state_history(config))) = 5
+PASS: sqlite checkpoint survives a fresh process re-opening the same db file.
