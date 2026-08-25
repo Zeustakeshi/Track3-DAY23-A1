@@ -29,14 +29,18 @@ tracking, account balance, search.
    Example: "lookup order 12345" -> tool, risk_level=low
 
 3. "missing_info" -- the query is too vague to act on; you don't know what "it" refers \
-to or what the user actually wants.
+to or what the user actually wants. This includes short complaints that use a vague \
+pronoun ("it", "this", "that") without naming what system, order, or feature is affected \
+-- you cannot route the failure to a specific tool without asking what "it" is.
    Example: "Can you fix it?" -> missing_info, risk_level=low
    Example: "fix it" -> missing_info, risk_level=low
+   Example: "It's broken" -> missing_info, risk_level=low (broken WHAT? no system named)
 
-4. "error" -- the user is reporting a system failure, timeout, or outage, not asking a \
-question.
+4. "error" -- the user reports a failure and NAMES the failing system, action, or \
+process clearly enough to act on (retry/escalate) without asking a follow-up question.
    Example: "Timeout failure while processing request" -> error, risk_level=low
    Example: "System failure cannot recover after multiple attempts" -> error, risk_level=low
+   Example: "Payment service unavailable, checkout keeps failing" -> error, risk_level=low
 
 5. "simple" -- a general question answerable directly, with no tool call, no side \
 effect, and no missing context.
