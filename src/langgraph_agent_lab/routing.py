@@ -57,8 +57,8 @@ def route_after_retry(state: AgentState) -> str:
     Reads both values from state (never hard-code the limit) -- retry_or_fallback_node
     increments "attempt" BEFORE this function is called, per CONTRACT.md section 4.
     """
-    attempt = state.get("attempt", 0)
-    max_attempts = state.get("max_attempts", 3)
+    attempt = int(state.get("attempt", 0))
+    max_attempts = int(state.get("max_attempts", 3))
     if attempt < max_attempts:
         return "tool"
     return "dead_letter"
@@ -74,6 +74,6 @@ def route_after_approval(state: AgentState) -> str:
     {"approved": bool, "reviewer": str, "comment": str} -- never a Pydantic object.
     """
     approval = state.get("approval") or {}
-    if approval.get("approved"):
+    if approval.get("approved") is True:
         return "tool"
     return "clarify"
