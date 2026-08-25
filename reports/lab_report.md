@@ -1,18 +1,25 @@
 # Day 08 Lab Report
 
-## 1. Team / student
+## 1. Thông Tin Nhóm
 
-- Name:
-- Repo/commit:
-- Date: 2026-08-25
+- Ngày báo cáo: 2026-08-25
+- Repo/commit: source mới nhất tại thời điểm kiểm thử
 
-Phạm Minh Hiếu - 2A202601562
-Phạm Công Đăng - 2A202601280
-Nguyễn Thị Thu Trang - 2A202601172
-Trương Minh Tâm - 2A202602005
-Trần Minh Hiển - 2A202601812
+| Thành viên | MSSV |
+| --- | --- |
+| Phạm Minh Hiếu | 2A202601562 |
+| Phạm Công Đăng | 2A202601280 |
+| Nguyễn Thị Thu Trang | 2A202601172 |
+| Trương Minh Tâm | 2A202602005 |
+| Trần Minh Hiển | 2A202601812 |
 
-## 2. Architecture
+## 2. Kiến Trúc Hệ Thống
+
+Hệ thống được xây dựng bằng `StateGraph(AgentState)` gồm 11 node:
+
+`intake`, `classify`, `tool`, `evaluate`, `answer`, `clarify`, `risky_action`, `approval`, `retry`, `dead_letter`, `finalize`.
+
+Luồng xử lý chính:
 
 ```mermaid
 flowchart LR
@@ -29,41 +36,52 @@ flowchart LR
   tool --> evaluate
   evaluate -->|success| answer
   evaluate -->|needs_retry| retry
-  retry -->|attempt < max| tool
-  retry -->|attempt >= max| dead_letter
+  retry -->|attempt < max_attempts| tool
+  retry -->|attempt >= max_attempts| dead_letter
   answer --> finalize
   clarify --> finalize
   dead_letter --> finalize
   finalize --> END([END])
 ```
 
-_(Placeholder above is the frozen target graph from `CONTRACT.md` / `TEAM_PLAN.html`. Replace it with the actual output of `graph.get_graph().draw_mermaid()` from `build_graph()` before submission — M1's bonus task.)_
+`classify` là node quyết định route ban đầu. Các route có rủi ro đi qua `risky_action -> approval` trước khi gọi tool. Vòng lặp `tool -> evaluate -> retry -> tool` được giới hạn bằng `max_attempts`, giúp tránh lặp vô hạn. Mọi nhánh đều kết thúc tại `finalize -> END` để ghi lại audit trail.
 
-The graph is a single `StateGraph(AgentState)` with **11 nodes**: `intake, classify, tool, evaluate, answer, clarify, risky_action, approval, retry, dead_letter, finalize`. `classify` is the only branch point that reads the query and decides intent; four `add_conditional_edges` calls implement the branching (`route_after_classify`, `route_after_evaluate`, `route_after_retry`, `route_after_approval`), all others are fixed edges. Every terminal node (`answer`, `clarify`, `dead_letter`) has a fixed edge into `finalize → END`, so no branch can exit the graph without an audit trail. The `tool → evaluate → retry → tool` cycle is the only loop in the graph and is bounded by `attempt < max_attempts` in `route_after_retry` (see `src/langgraph_agent_lab/routing.py:49`).
+## 3. State Schema Và Reducer
 
-State is one `AgentState` TypedDict (`src/langgraph_agent_lab/state.py`), kept intentionally lean and JSON-serializable so it round-trips through the checkpointer: scalars for control flow (`route`, `risk_level`, `attempt`, `max_attempts`, `evaluation_result`, `pending_question`, `proposed_action`, `approval`, `final_answer`) and four append-only lists for the audit trail (`messages`, `tool_results`, `errors`, `events`).
+State dùng `AgentState` dạng TypedDict, gọn và có thể serialize qua checkpointer.
 
-## 3. State schema
-
-| Field | Reducer | Why |
+| Field | Reducer | Mục đích |
 | --- | --- | --- |
-| `route` | overwrite | Written only by `classify_node`; routing functions and `metric_from_state` need the *current* route, not a history of routes. |
-| `risk_level` | overwrite | Set once by `classify_node`, read for reporting only. |
-| `attempt` / `max_attempts` | overwrite | `retry_or_fallback_node` increments `attempt` before `route_after_retry` reads it; an `add` reducer would make the increment ambiguous under concurrent writes. |
-| `evaluation_result` | overwrite | `"success" \| "needs_retry"` — only the latest evaluation should drive `route_after_evaluate`. |
-| `pending_question` | overwrite | Only the most recent clarification question is meaningful to the user. |
-| `proposed_action` | overwrite | Only the current risky action awaiting approval matters. |
-| `approval` | overwrite (plain `dict`) | `route_after_approval` does `state["approval"]["approved"]`; must be `ApprovalDecision(...).model_dump()`, never a Pydantic object, or the dict lookup raises `TypeError`. |
-| `messages` | append (`operator.add`) | Conversation/audit log — every entry is historically meaningful. |
-| `tool_results` | append (`operator.add`) | Each tool call's result must be preserved across retries for grounding `answer_node`. |
-| `errors` | append (`operator.add`) | Every failure (LLM error, tool error) is retained for the failure analysis below. |
-| `events` | append (`operator.add`) | `make_event(node, ...)` audit trail; `nodes_visited`, `retry_count`, and `interrupt_count` in `metrics.py` are all derived by counting `event["node"]` values here. |
+| `route` | overwrite | Route hiện tại do `classify_node` sinh ra. |
+| `risk_level` | overwrite | Mức rủi ro của yêu cầu. |
+| `attempt`, `max_attempts` | overwrite | Điều khiển số lần retry. |
+| `evaluation_result` | overwrite | Kết quả đánh giá tool: `success` hoặc `needs_retry`. |
+| `pending_question` | overwrite | Câu hỏi cần làm rõ với người dùng. |
+| `proposed_action` | overwrite | Hành động rủi ro đang chờ phê duyệt. |
+| `approval` | overwrite | Quyết định phê duyệt ở dạng plain `dict`. |
+| `final_answer` | overwrite | Câu trả lời cuối cùng. |
+| `messages` | append | Lịch sử hội thoại/audit. |
+| `tool_results` | append | Kết quả mỗi lần gọi tool. |
+| `errors` | append | Lỗi hoặc retry được ghi nhận. |
+| `events` | append | Sự kiện từng node, dùng để tính metrics. |
 
-**Contract rule enforced by the append-only fields:** a node must return `{"tool_results": [x]}` (one new item), never `{"tool_results": state["tool_results"] + [x]}` — the latter double-counts because the reducer already concatenates.
+Với các field append-only, node chỉ trả về item mới, ví dụ `{"tool_results": [x]}`. Không trả lại toàn bộ list cũ để tránh nhân đôi dữ liệu.
 
-## 4. Scenario results
+## 4. Kết Quả Kiểm Thử
 
-**Status: green.** `make run-scenarios && make grade-local` against a live OpenAI (`gpt-4o-mini`) backend:
+Lệnh đã chạy:
+
+```bash
+make test
+set -a; source .env; set +a; LLM_MODEL=gemini-3.6-flash make run-scenarios
+set -a; source .env; set +a; LLM_MODEL=gemini-3.6-flash make grade-local
+```
+
+Kết quả:
+
+- Unit test: `19 passed, 6 skipped`
+- Metrics validation: `Metrics valid. success_rate=100.00%`
+- LLM dùng khi kiểm thử: `gemini-3.6-flash`
 
 | Metric | Value |
 | --- | ---: |
@@ -72,66 +90,69 @@ State is one `AgentState` TypedDict (`src/langgraph_agent_lab/state.py`), kept i
 | avg_nodes_visited | 6.42 |
 | total_retries | 5 |
 | total_interrupts | 3 |
-| resume_success | false (see §6 — demonstrated separately, not yet wired into the scenario runner) |
+| resume_success | false |
 
 | Scenario | Expected route | Actual route | Success | Nodes visited | Retries | Interrupts |
 | --- | --- | --- | :---: | ---: | ---: | ---: |
-| S01_simple | simple | simple | ✅ | 4 | 0 | 0 |
-| S02_tool | tool | tool | ✅ | 6 | 0 | 0 |
-| S03_missing | missing_info | missing_info | ✅ | 4 | 0 | 0 |
-| S04_risky | risky | risky | ✅ | 8 | 0 | 1 |
-| S05_error | error | error | ✅ | 10 | 2 | 0 |
-| S06_delete | risky | risky | ✅ | 8 | 0 | 1 |
-| S07_dead_letter | error | error | ✅ | 5 | 1 | 0 |
-| S08_cancel | risky | risky | ✅ | 8 | 0 | 1 |
-| S09_track | tool | tool | ✅ | 6 | 0 | 0 |
-| S10_broken | missing_info | missing_info | ✅ | 4 | 0 | 0 |
-| S11_unavailable | error | error | ✅ | 10 | 2 | 0 |
-| S12_policy | simple | simple | ✅ | 4 | 0 | 0 |
+| S01_simple | simple | simple | Yes | 4 | 0 | 0 |
+| S02_tool | tool | tool | Yes | 6 | 0 | 0 |
+| S03_missing | missing_info | missing_info | Yes | 4 | 0 | 0 |
+| S04_risky | risky | risky | Yes | 8 | 0 | 1 |
+| S05_error | error | error | Yes | 10 | 2 | 0 |
+| S06_delete | risky | risky | Yes | 8 | 0 | 1 |
+| S07_dead_letter | error | error | Yes | 5 | 1 | 0 |
+| S08_cancel | risky | risky | Yes | 8 | 0 | 1 |
+| S09_track | tool | tool | Yes | 6 | 0 | 0 |
+| S10_broken | missing_info | missing_info | Yes | 4 | 0 | 0 |
+| S11_unavailable | error | error | Yes | 10 | 2 | 0 |
+| S12_policy | simple | simple | Yes | 4 | 0 | 0 |
 
-S04/S06/S08 (the three `risky` scenarios) all show `approval_observed=true`, satisfying the ≥2-interrupt Gate 2 requirement with one to spare. S05/S11 (`max_attempts=3`) each retry twice before succeeding; S07 (`max_attempts=1`) retries exactly once and lands in `dead_letter` — matching the S05/S07 trace in `CONTRACT.md §4` exactly.
+Nhận xét:
 
-**Note on the earlier run:** the first pass against the free Gemini tier failed at `success_rate=16.7%` purely from `429 RESOURCE_EXHAUSTED` quota errors (`classify_node`'s safe fallback routed everything to `simple`). Switching the LLM provider to OpenAI fixed 8 of the 9 failures immediately; the ninth (`S10_broken`, `"It's broken"`) was a genuine classifier ambiguity between `missing_info` and `error` — fixed by sharpening the few-shot examples in `nodes_classify.py` to key off "does the query name a specific failing system" rather than surface words like "broken"/"failure". See §5.
+- Tất cả 12 scenario đều đúng route kỳ vọng.
+- Ba scenario rủi ro `S04`, `S06`, `S08` đều đi qua approval, đạt yêu cầu HITL.
+- `S05` và `S11` retry 2 lần rồi thành công.
+- `S07` đạt giới hạn retry và đi vào `dead_letter` đúng thiết kế.
 
-## 5. Failure analysis
+## 5. Phân Tích Lỗi Và Khả Năng Chịu Lỗi
 
-Two failure modes considered — one that actually surfaced during this lab, one designed-for and traced but not hit in the final run:
+**Lỗi LLM/model không khả dụng.** Nếu LLM lỗi, `classify_node` bắt exception, ghi vào `errors` và fallback về route `simple` để graph không crash. Trong quá trình kiểm thử, model mặc định `gemini-2.5-flash` bị API trả 404 vì không còn khả dụng cho user mới. Cách khắc phục là chạy với `LLM_MODEL=gemini-3.6-flash`.
 
-1. **LLM classification failure / provider quota exhaustion (observed, and recovered from).** `classify_node` wraps its `get_llm().with_structured_output(...)` call in `try/except` per Rule ⑤ of `CONTRACT.md`: any exception is caught, logged into `errors`, and the node falls back to `route="simple"` instead of raising. On the free-tier Gemini key this fired on every single scenario (`ChatGoogleGenerativeAIError: 429 RESOURCE_EXHAUSTED`, `limit: 20/day`), collapsing `success_rate` to 16.7% while the graph itself stayed alive (no crash, `graph.invoke()` always returned). **Mitigation already in place:** the fallback route is the *safest* one (`answer`, not `risky_action` or `tool`), so an LLM outage degrades to an ungrounded answer rather than skipping human approval or firing an unguarded tool call — and the failure is *visible* in `errors`/`success` rather than silently masked. **Actual fix:** switched provider to OpenAI (`gpt-4o-mini`) via `.env`, which required upgrading `langchain-openai` from a stale 0.1.25 install to `>=0.3.0` to match the installed `langchain-core 1.6.0` (the old package imported a removed `langchain_core.pydantic_v1` shim). A related, narrower classification miss (`S10_broken`: "It's broken" → `error` instead of `missing_info`) was fixed by tightening the `missing_info` vs `error` few-shot examples to disambiguate on "does the query name what's failing", not keyword overlap with "broken"/"failure".
+**Retry bị giới hạn.** Với route `error`, tool có thể trả về lỗi tạm thời. `evaluate_node` đánh dấu `needs_retry`, sau đó `retry` tăng `attempt`. Nếu `attempt < max_attempts`, graph gọi lại tool; nếu vượt giới hạn, graph đi đến `dead_letter`. Cơ chế này tránh lặp vô hạn và vẫn ghi rõ lỗi trong audit trail.
 
-2. **Bounded retry exhaustion → dead letter (designed, traced in `CONTRACT.md §4`, and now confirmed in the passing run).** For `route == "error"` scenarios, `tool_node` deliberately returns a string containing `"ERROR"` while `attempt < 2`, driving `evaluate_node` to `evaluation_result="needs_retry"`. `retry_or_fallback_node` increments `attempt` *before* `route_after_retry` reads it, and `route_after_retry` compares `attempt < max_attempts` (never hard-coded). S05/S11 (`max_attempts=3`) each recover after two retries (`retry_count=2`, `nodes_visited=10`); S07 (`max_attempts=1`) exhausts on the very first retry (`retry_count=1`, `nodes_visited=5`) and routes straight to `dead_letter`, which sets a `final_answer` explaining the escalation instead of looping forever. **Risk if unbounded:** an off-by-one in `route_after_retry` (e.g. `<=` or a hard-coded `3`) would loop forever burning API quota — compounding failure mode #1 — or terminate one attempt early. **Mitigation:** the threshold is read from `state["max_attempts"]`, never hard-coded, and is unit-tested via `tests/test_routing.py`.
+## 6. Persistence Và Recovery
 
-## 6. Persistence / recovery evidence
+`persistence.py` hỗ trợ SQLite checkpointer bằng `SqliteSaver`, kết hợp `sqlite3.connect(..., check_same_thread=False)` và `PRAGMA journal_mode=WAL`.
 
-`persistence.py` builds a `SqliteSaver` with an explicit `sqlite3.connect(path, check_same_thread=False)` connection and `PRAGMA journal_mode=WAL` (per contract — `SqliteSaver.from_conn_string()` is not used, since `langgraph-checkpoint-sqlite` 3.x no longer supports it as a context manager). Each scenario run gets its own `thread_id` (`thread-<scenario_id>`), so checkpoints are isolated per scenario in `outputs/lab.db`.
+Bằng chứng recovery đã được kiểm tra bằng:
 
-Crash-resume was verified with `scripts/test_persistence_resume.py`, which runs a small graph against `outputs/persistence_demo.db`, closes the process-local connection, and re-opens the **same database file in a fresh `SqliteSaver`/process** to confirm the checkpoint round-trips. Evidence log (`reports/persistence_resume_evidence.log`):
-
+```bash
+set -a; source .env; set +a; python scripts/test_persistence_resume.py
 ```
-=== SQLite checkpointer resume evidence — 2026-08-25T16:54:57.188081 ===
-build_checkpointer('sqlite', 'outputs/persistence_demo.db') -> <langgraph.checkpoint.sqlite.SqliteSaver object at 0x00000254C141CF20>
+
+Kết quả trong `reports/persistence_resume_evidence.log`:
+
+```text
 invoke() final state: attempt=3, events=3
 [process 1] len(list(graph.get_state_history(config))) = 5
-[process 2] resumed state.values = {'attempt': 3, 'messages': [], 'tool_results': [], 'errors': [], 'events': [...]}
+[process 2] resumed state.values = {'attempt': 3, ...}
 [process 2] len(list(graph.get_state_history(config))) = 5
 PASS: sqlite checkpoint survives a fresh process re-opening the same db file.
 ```
 
-`get_state_history(config)` returns **5 checkpoint records** (> 5 required by the rubric) both before and after the simulated process restart, and the resumed `state.values` matches the pre-restart state exactly — this is direct evidence of durable, replayable persistence, not just an in-memory checkpointer. `outputs/metrics.json`'s `resume_success` flag should be set to `true` once this evidence is wired into the scenario run (`total_scenarios ≥ 6` and a passing resume check).
+Điều này chứng minh checkpoint được lưu bền vững trong SQLite và có thể đọc lại sau khi mở process mới. Trường `resume_success` trong `outputs/metrics.json` vẫn là `false` vì phần kiểm tra resume hiện đang nằm ở script riêng, chưa được tích hợp vào scenario runner.
 
-## 7. Extension work
+## 7. Phần Mở Rộng Đã Thực Hiện
 
-- SQLite checkpointer with WAL mode (`persistence.py`), verified with a real process-restart, not just an in-memory re-open.
-- `classify_node` uses `get_llm().with_structured_output(Classification)` (Pydantic model with `Literal` route/risk fields), not keyword/regex matching.
-- `answer_node` / `ask_clarification_node` are grounded LLM calls over `query` + `tool_results` + `approval`, with an explicit "don't fabricate" instruction in the prompt.
-- Mermaid diagram of the compiled graph (`graph.get_graph().draw_mermaid()`) — pending M1 to paste the live output over the placeholder in §2.
+- Tích hợp LLM cho `classify_node` bằng structured output.
+- Tích hợp LLM cho `answer_node` để trả lời dựa trên context/tool result.
+- Có HITL approval cho route rủi ro.
+- Có bounded retry và dead-letter path.
+- Có SQLite persistence và log recovery riêng.
 
-## 8. Improvement plan
+## 8. Hướng Cải Tiến
 
-If given one more day, in priority order:
-
-1. **Remove the hard dependency on live LLM calls for grading.** This run demonstrated that a free-tier rate limit (`20 requests/day` on `gemini-2.5-flash`) can zero out `success_rate` even though every node behaves correctly — switching to OpenAI worked around it, but a paid/production key shouldn't be a prerequisite for CI to pass. Add a `FakeChatModel`/recorded-response test double for `classify_node`/`answer_node` so `make run-scenarios` can run deterministically in CI without burning quota, while keeping a separate "live LLM" smoke test for real-provider regressions.
-2. **Add a retry/backoff wrapper around the LLM call itself** (distinct from the tool-retry loop in `nodes_tools.py`) so a transient `429`/`5xx` from the provider doesn't immediately fall back to `route="simple"` — only a sustained outage should degrade routing quality.
-3. **Wire `resume_success` into the real scenario runner**, not just the standalone `scripts/test_persistence_resume.py` demo, so the rubric-required evidence lives in `outputs/metrics.json` itself instead of a side log.
-4. **Add a Postgres checkpointer** (`persistence.py` currently raises `NotImplementedError` for `kind="postgres"`) for a production-realistic multi-worker deployment.
-5. **Broaden the classifier's few-shot set** beyond the `missing_info`/`error` boundary fixed here (`"It's broken"`) — audit a wider set of ambiguous, real-world-phrased queries against the live model rather than only the 12 checked-in scenarios.
+1. Cập nhật model mặc định từ `gemini-2.5-flash` sang model còn khả dụng, ví dụ `gemini-3.6-flash`.
+2. Tích hợp kết quả `scripts/test_persistence_resume.py` vào scenario runner để `resume_success=True` khi recovery pass.
+3. Thêm fake/recorded LLM cho CI để test không phụ thuộc API key và quota.
+4. Thêm retry/backoff riêng cho lỗi LLM tạm thời như 429 hoặc 5xx.
