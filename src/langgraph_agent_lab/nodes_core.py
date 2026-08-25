@@ -26,4 +26,4 @@ def finalize_node(state: AgentState) -> dict:
 
     Return: {"events": [make_event("finalize", "completed", "workflow finished")]}
     """
-    raise NotImplementedError("TODO(M1): implement finalize node")
+    return {"events": [make_event("finalize", "completed", "workflow finished")]}
