@@ -6,6 +6,12 @@
 - Repo/commit:
 - Date:
 
+Phạm Minh Hiếu - 2A202601562
+Phạm Công Đăng - 2A202601280
+Nguyễn Thị Thu Trang - 2A202601172
+Trương Minh Tâm - 2A202602005
+Trần Minh Hiển - 2A202601812
+
 ## 2. Architecture
 
 Describe your graph nodes, edges, state fields, and reducers.
@@ -14,17 +20,17 @@ Describe your graph nodes, edges, state fields, and reducers.
 
 List important fields and whether they are overwrite or append-only.
 
-| Field | Reducer | Why |
-|---|---|---|
-| messages | append | audit conversation/events |
-| route | overwrite | current route only |
+| Field    | Reducer   | Why                       |
+| -------- | --------- | ------------------------- |
+| messages | append    | audit conversation/events |
+| route    | overwrite | current route only        |
 
 ## 4. Scenario results
 
 Paste the key metrics from `outputs/metrics.json`.
 
 | Scenario | Expected route | Actual route | Success | Retries | Interrupts |
-|---|---|---|---:|---:|---:|
+| -------- | -------------- | ------------ | ------: | ------: | ---------: |
 
 ## 5. Failure analysis
 
