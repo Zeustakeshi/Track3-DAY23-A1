@@ -5,3 +5,8 @@
 {"id":"S05_error","query":"Timeout failure while processing request","expected_route":"error","requires_approval":false,"should_retry":true,"tags":["retry"]}
 {"id":"S06_delete","query":"Delete customer account after support verification","expected_route":"risky","requires_approval":true,"should_retry":false,"tags":["hitl","destructive"]}
 {"id":"S07_dead_letter","query":"System failure cannot recover after multiple attempts","expected_route":"error","requires_approval":false,"should_retry":true,"max_attempts":1,"tags":["dead_letter","retry"]}
+{"id": "S08_cancel", "query": "Cancel my subscription immediately", "expected_route": "risky", "requires_approval": true, "should_retry": false, "tags": ["hitl", "risky", "custom"]}
+{"id": "S09_track", "query": "Can you track my shipment, tracking number 98765?", "expected_route": "tool", "requires_approval": false, "should_retry": false, "tags": ["tool", "custom"]}
+{"id": "S10_broken", "query": "It's broken", "expected_route": "missing_info", "requires_approval": false, "should_retry": false, "tags": ["clarification", "custom"]}
+{"id": "S11_unavailable", "query": "The service is unavailable right now", "expected_route": "error", "requires_approval": false, "should_retry": true, "tags": ["retry", "custom"]}
+{"id": "S12_policy", "query": "What is your refund policy?", "expected_route": "simple", "requires_approval": false, "should_retry": false, "tags": ["simple", "custom"]}
